@@ -1,4 +1,4 @@
-import { CANVAS, WORLD, CAMERA, MATCH, FIGHTER_SIZE, FIGHTERS, PROJECTILE, CHARGE, STAGE } from './config.js';
+import { CANVAS, WORLD, CAMERA, MATCH, FIGHTER_SIZE, FIGHTERS, PROJECTILE, CHARGE, STAGE, MAPS } from './config.js';
 import { KEYMAPS } from './config.js';
 import { Fighter } from './fighter.js';
 import { KeyboardController } from './controllers/keyboard.js';
@@ -9,6 +9,7 @@ import { MainMenu } from './menu.js';
 import { CharacterSelect } from './select.js';
 import { FighterInfo } from './info.js';
 import { ModeSelect } from './modeselect.js';
+import { MapSelect } from './mapselect.js';
 import { LoadingScreen } from './loading.js';
 import { Projectile } from './projectile.js';
 import { loadFighterAnimations, loadPrefixedFrames } from './sprites.js';
@@ -38,6 +39,8 @@ export class Game {
     this.select = null;
     this.info = null;
     this.modeSelect = null;
+    this.mapSelect = null;
+    this.chosenMap = MAPS[0]; // The Lobby, until the player picks another
     this.p2Type = 'ai';    // 'ai' | 'human'
     this.loading = false;  // true while fighter sprites load after select
     this.projectiles = []; // live fireballs / calculations
@@ -57,6 +60,7 @@ export class Game {
     this.camX = 0; // camera scroll, follows the fighters
 
     this.lobbyMusic = new Music('assets/audio/Lobbymusic.mp3');
+    this.matchMusic = null; // whichever map's track is playing during a fight
   }
 
   // All the title screen's own assets: background frames, button frames, music.
@@ -80,6 +84,10 @@ export class Game {
   beginMenu() {
     this.menu = new MainMenu(this.keyboard);
     this.setState('menu');
+    if (this.matchMusic) {
+      this.matchMusic.stop();
+      this.matchMusic = null;
+    }
     this.lobbyMusic.restart();
   }
 
@@ -94,7 +102,13 @@ export class Game {
     this.setState('select');
   }
 
-  // Both players have picked: load the chosen fighters' sprites, then fight.
+  beginMapSelect() {
+    this.mapSelect = new MapSelect(this.keyboard);
+    this.setState('mapSelect');
+  }
+
+  // Both players have picked and the map is chosen: load fighter sprites
+  // and the map's own layers together, then fight.
   async launchMatch() {
     const p1Def = FIGHTERS[this.select.picks.p1];
     const p2Def = FIGHTERS[this.select.picks.p2];
@@ -103,6 +117,7 @@ export class Game {
       loadFighterAnimations(p2Def.slug),
       loadPrefixedFrames(`assets/sprites/${p1Def.slug}`, 'FB'),
       loadPrefixedFrames(`assets/sprites/${p2Def.slug}`, 'FB'),
+      this.stage.loadMap(this.chosenMap),
     ]);
     this.loading = false;
     this.startMatch(
@@ -113,6 +128,11 @@ export class Game {
 
   startMatch(p1, p2) {
     const isCPU = this.p2Type === 'ai';
+
+    this.lobbyMusic.stop();
+    this.matchMusic = this.chosenMap.music ? new Music(this.chosenMap.music) : null;
+    if (this.matchMusic) this.matchMusic.restart();
+
     const f1 = new Fighter({
       name: p1.def.name, x: WORLD.width / 2 - 240, facing: 1,
       animations: p1.animations, color: p1.def.color, def: p1.def,
@@ -165,6 +185,7 @@ export class Game {
 
   update(dt) {
     this.stateTime += dt;
+    this.stage.update(dt);
 
     switch (this.state) {
       case 'loading':
@@ -195,7 +216,13 @@ export class Game {
 
       case 'select':
         this.select.update(dt);
-        if (this.select.done && !this.loading) {
+        if (this.select.done) this.beginMapSelect();
+        break;
+
+      case 'mapSelect':
+        this.mapSelect.update(dt);
+        if (this.mapSelect.choice && !this.loading) {
+          this.chosenMap = MAPS.find((m) => m.id === this.mapSelect.choice);
           this.loading = true;
           this.launchMatch();
         }
@@ -464,6 +491,10 @@ export class Game {
     }
     if (this.state === 'select') {
       this.select.draw(ctx);
+      return;
+    }
+    if (this.state === 'mapSelect') {
+      this.mapSelect.draw(ctx);
       return;
     }
     if (this.state === 'info') {

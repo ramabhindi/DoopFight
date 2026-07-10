@@ -20,6 +20,33 @@ export const STAGE = {
   wallPadding: 60,    // how close to the world edges fighters can walk
 };
 
+// Selectable fight stages (see mapselect.js for the 2x3 picker screen).
+// Each layer is either { type: 'static', src } (one PNG) or
+// { type: 'animated', prefix, fps } (auto-discovers assets/stages/<prefix>0000.png,
+// <prefix>0001.png, ... and loops). A layer of `null` just isn't drawn —
+// Stage falls back to its placeholder, same as any other missing art.
+// `music` is the track that plays during the fight; `null` means none yet.
+export const MAPS = [
+  {
+    id: 'lobby', name: 'The Lobby', thumbnail: null,
+    background: { type: 'static', src: 'assets/stages/background.png' },
+    ground: { type: 'static', src: 'assets/stages/ground.png' },
+    foreground: { type: 'static', src: 'assets/stages/foreground.png' },
+    music: null,
+  },
+  {
+    id: 'nightclub', name: 'The Nightclub', thumbnail: 'assets/stages/ThumbnailDiscoDance.png',
+    background: { type: 'animated', prefix: 'DiscoDanceBG', fps: 10 },
+    ground: { type: 'animated', prefix: 'DiscoDanceGround', fps: 10, yOffset: 25 },
+    foreground: { type: 'animated', prefix: 'DiscoDanceForeground', fps: 10 },
+    music: 'assets/audio/NightClub_SoundTrack.mp3',
+  },
+  { id: 'casino', name: 'The Casino', thumbnail: null, background: null, ground: null, foreground: null, music: null },
+  { id: 'cage',   name: 'The Cage',   thumbnail: null, background: null, ground: null, foreground: null, music: null },
+  { id: 'zoo',    name: 'The Zoo',    thumbnail: null, background: null, ground: null, foreground: null, music: null },
+  { id: 'hq',     name: 'The HQ',     thumbnail: null, background: null, ground: null, foreground: null, music: null },
+];
+
 export const PHYSICS = {
   gravity: 3000,      // px/s^2
   walkSpeed: 320,     // px/s

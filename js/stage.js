@@ -2,30 +2,78 @@ import { CANVAS, WORLD, STAGE } from './config.js';
 import { loadImage } from './sprites.js';
 
 // ---------------------------------------------------------------
-// The stage is three hand-drawn PNG layers in assets/stages/:
+// The stage is three layers, chosen per-map (see config.js MAPS):
 //
-//   background.png — far scenery (sky, buildings). Drawn first.
-//   ground.png     — the walking ground, exactly WORLD.width wide.
-//                    Scrolls 1:1 with the fighters. Drawn behind them.
-//   foreground.png — near props (bushes, railings). Drawn IN FRONT
-//                    of the fighters. Needs lots of transparency.
+//   background — far scenery. Drawn first.
+//   ground     — the walking ground, exactly WORLD.width wide.
+//                Scrolls 1:1 with the fighters. Drawn behind them.
+//   foreground — near props. Drawn IN FRONT of the fighters.
+//                Needs lots of transparency.
 //
-// Parallax speed is automatic, based on image width:
+// A layer is either a single static PNG or an auto-discovered numbered
+// sequence (assets/stages/<prefix>0000.png, 0001.png, ...) that loops
+// at its own fps. Parallax speed is automatic, based on image width:
 //   wider image  = scrolls faster (feels closer)
 //   1280px wide  = doesn't scroll at all (pinned to the screen)
-// So: background ~1600px, ground exactly 2200px, foreground ~2600px.
 // All layers are bottom-aligned and 720px tall is the safe default.
-// Any layer that's missing just isn't drawn (placeholders fill in).
+// Any layer that's missing (or a map that just doesn't have one yet)
+// isn't drawn — placeholders fill in, same as any other missing art.
 // ---------------------------------------------------------------
+
+async function loadNumberedFrames(dir, prefix) {
+  const frames = [];
+  for (let i = 0; ; i++) {
+    const img = await loadImage(`${dir}/${prefix}${String(i).padStart(4, '0')}.png`);
+    if (!img) break;
+    frames.push(img);
+  }
+  return frames;
+}
+
+async function loadLayer(def) {
+  if (!def) return null;
+  if (def.type === 'static') {
+    const img = await loadImage(def.src);
+    return img ? { kind: 'static', img } : null;
+  }
+  const frames = await loadNumberedFrames('assets/stages', def.prefix);
+  return frames.length ? { kind: 'animated', frames, fps: def.fps ?? 10 } : null;
+}
 
 export class Stage {
   constructor() {
     this.background = null;
     this.ground = null;
     this.foreground = null;
-    loadImage('assets/stages/background.png').then((img) => { this.background = img; });
-    loadImage('assets/stages/ground.png').then((img) => { this.ground = img; });
-    loadImage('assets/stages/foreground.png').then((img) => { this.foreground = img; });
+    this.groundYOffset = 0;
+    this.animTime = 0;
+  }
+
+  // Swap in a new map's layers. Call once when a fight starts.
+  async loadMap(mapDef) {
+    const [background, ground, foreground] = await Promise.all([
+      loadLayer(mapDef.background),
+      loadLayer(mapDef.ground),
+      loadLayer(mapDef.foreground),
+    ]);
+    this.background = background;
+    this.ground = ground;
+    this.foreground = foreground;
+    this.groundYOffset = mapDef.ground?.yOffset ?? 0;
+    this.animTime = 0;
+  }
+
+  update(dt) {
+    this.animTime += dt;
+  }
+
+  // The layer's current Image: the static PNG, or whichever animation
+  // frame is due right now (loops continuously at the layer's own fps).
+  currentImage(layer) {
+    if (!layer) return null;
+    if (layer.kind === 'static') return layer.img;
+    const i = Math.floor(this.animTime * layer.fps) % layer.frames.length;
+    return layer.frames[i];
   }
 
   // How far a layer scrolls for the current camera position.
@@ -38,22 +86,25 @@ export class Stage {
     return -camX * (layerRange / cameraRange);
   }
 
-  drawLayer(ctx, img, camX) {
-    ctx.drawImage(img, this.layerX(img, camX), CANVAS.height - img.height);
+  drawLayer(ctx, img, camX, yOffset = 0) {
+    ctx.drawImage(img, this.layerX(img, camX), CANVAS.height - img.height + yOffset);
   }
 
   // Everything BEHIND the fighters.
   drawBackground(ctx, camX) {
-    if (this.background) this.drawLayer(ctx, this.background, camX);
+    const bg = this.currentImage(this.background);
+    if (bg) this.drawLayer(ctx, bg, camX);
     else this.drawPlaceholderSky(ctx, camX);
 
-    if (this.ground) this.drawLayer(ctx, this.ground, camX);
+    const gr = this.currentImage(this.ground);
+    if (gr) this.drawLayer(ctx, gr, camX, this.groundYOffset);
     else this.drawPlaceholderGround(ctx, camX);
   }
 
   // Everything IN FRONT of the fighters.
   drawForeground(ctx, camX) {
-    if (this.foreground) this.drawLayer(ctx, this.foreground, camX);
+    const fg = this.currentImage(this.foreground);
+    if (fg) this.drawLayer(ctx, fg, camX);
   }
 
   // ---- placeholders until the hand-drawn layers exist ------------
