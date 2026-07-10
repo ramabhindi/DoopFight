@@ -2,7 +2,7 @@ import { ATTACKS } from '../config.js';
 
 const NEUTRAL = {
   left: false, right: false, crouch: false, block: false,
-  jump: false, punch: false, kick: false, special: false,
+  jump: false, punch: false, kick: false, special: false, superAtk: false,
 };
 
 // A deliberately simple AI: walks into range, throws random attacks,
@@ -24,6 +24,7 @@ export class AIController {
     // One-shot commands (attacks/jump) should not repeat every frame
     const cmd = { ...this.plan };
     this.plan.punch = this.plan.kick = this.plan.special = this.plan.jump = false;
+    this.plan.superAtk = false;
     return cmd;
   }
 
@@ -33,6 +34,12 @@ export class AIController {
     const dist = Math.abs(foe.x - me.x);
     const towardFoe = foe.x > me.x ? 'right' : 'left';
     const cmd = { ...NEUTRAL };
+
+    // Meter's full — unleash the super (with a little hesitation)
+    if (me.superReady && Math.random() < 0.5) {
+      cmd.superAtk = true;
+      return cmd;
+    }
 
     // Opponent is swinging and close — sometimes block (guess high or low)
     if (foe.attack && dist < 260 && Math.random() < 0.45) {

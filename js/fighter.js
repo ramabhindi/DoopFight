@@ -1,11 +1,14 @@
 import {
   WORLD, STAGE, PHYSICS, MATCH, ATTACKS, BASE_STAT,
-  HURT_TIME, BLOCK_CHIP, BLOCK_PUSHBACK, FIGHTER_SIZE, SPRITE_SCALE,
+  HURT_TIME, BLOCK_DAMAGE_MULT, BLOCK_PUSHBACK, FIGHTER_SIZE, SPRITE_SCALE,
 } from './config.js';
 import { Animator } from './sprites.js';
 
 // States a fighter can be in. Each maps 1:1 to an animation name.
-// idle, walk, jump, crouch, block, blockLow, punch, kick, special, hurt, ko
+// idle, walk, jump, crouch, block, blockLow, punch, kick, special,
+// punchLow, kickLow, hurt, ko
+
+const ATTACK_STATES = ['punch', 'kick', 'special', 'punchLow', 'kickLow'];
 
 export class Fighter {
   constructor({ name, x, facing, animations, color, def }) {
@@ -35,6 +38,21 @@ export class Fighter {
     this.attackHasHit = false; // an attack can only connect once
     this.projectileFrames = []; // fireball animation, loaded by Game if this fighter has one
 
+    // Super meter
+    this.superDef = null;      // equipped super (set by Game at match start)
+    this.charge = 0;           // fills from hits; see CHARGE in config.js
+    this.chargeLocked = false; // RB Locks: no charge gain until landing an unblocked hit
+
+    // Timed status effects: { type, time, data }
+    this.statuses = [];
+    // One-shot / persistent super modifiers
+    this.flatReduction = 0;        // Better Biff: flat damage reduction, resets each round
+    this.nextAttackDamageMult = 1; // The Gambler
+    this.nextAttackRangeMult = 1;  // LockJaw
+    this.negateNextHit = false;    // Low Opacity
+    this.heatCheck = null;         // Heat Check: { bonus } until hit unblocked
+    this.bonusHealth = 0;          // ExoSkeleton silver bar
+
     this.animator = new Animator(animations);
     this.animator.play('idle');
   }
@@ -49,6 +67,15 @@ export class Fighter {
     this.jumpsUsed = 0;
     this.attack = null;
     this.attackHasHit = false;
+    // Super meter charge carries over between rounds; effects don't.
+    this.statuses = [];
+    this.flatReduction = 0;
+    this.nextAttackDamageMult = 1;
+    this.nextAttackRangeMult = 1;
+    this.negateNextHit = false;
+    this.heatCheck = null;
+    this.bonusHealth = 0;
+    this.chargeLocked = false;
     this.setState('idle');
   }
 
@@ -59,22 +86,73 @@ export class Fighter {
   }
 
   get grounded() { return this.y >= STAGE.floorY; }
-  get crouching() { return this.state === 'crouch' || this.state === 'blockLow'; }
+  get crouching() {
+    return ['crouch', 'blockLow', 'punchLow', 'kickLow'].includes(this.state);
+  }
   get isKO() { return this.state === 'ko'; }
+  get superReady() { return !!this.superDef && this.charge >= this.superDef.charges; }
 
   canAct() {
-    return !['hurt', 'ko', 'punch', 'kick', 'special', 'jump'].includes(this.state);
+    return !['hurt', 'ko', 'jump', ...ATTACK_STATES].includes(this.state) &&
+      !this.hasStatus('stun') && !this.hasStatus('dash');
   }
+
+  // ---- status effects ----------------------------------------------
+
+  addStatus(type, time, data = {}) { this.statuses.push({ type, time, data }); }
+  hasStatus(type) { return this.statuses.some((s) => s.type === type); }
+  getStatus(type) { return this.statuses.find((s) => s.type === type); }
+  statusMult(type) {
+    return this.statuses.filter((s) => s.type === type)
+      .reduce((m, s) => m * (s.data.mult ?? 1), 1);
+  }
+
+  tickStatuses(dt) {
+    for (const st of this.statuses) {
+      st.time -= dt;
+      if (st.type === 'dot') this.applyDamage(st.data.dps * dt); // White Rain / burn
+      if (st.type === 'exoregen' && this.bonusHealth > 0) {
+        this.bonusHealth = Math.min(50, this.bonusHealth + 2 * dt);
+      }
+    }
+    for (const st of this.statuses) {
+      if (st.time <= 0 && st.type === 'maxhp') { // Medication health buff expires
+        this.maxHealth = st.data.prev;
+        this.health = Math.min(this.health, this.maxHealth);
+      }
+    }
+    this.statuses = this.statuses.filter((s) => s.time > 0);
+  }
+
+  currentSpeed() { return this.walkSpeed * this.statusMult('speedMult'); }
+  currentMaxJumps() { return this.hasStatus('canJump') ? Math.max(1, this.maxJumps) : this.maxJumps; }
 
   // ---- main update -------------------------------------------------
 
   update(dt, cmd, opponent) {
     this.stateTime += dt;
     this.animator.update(dt);
+    this.tickStatuses(dt);
 
     // Always turn toward the opponent when free to act on the ground
     if (this.grounded && this.canAct()) {
       this.facing = opponent.x >= this.x ? 1 : -1;
+    }
+
+    // MALU's Fetch! dash overrides everything
+    if (this.hasStatus('dash')) {
+      this.vx = this.getStatus('dash').data.dir * 1600;
+      this.setStateIfChanged('walk');
+      this.applyPhysics(dt);
+      return;
+    }
+
+    // Stunned (Viral Sensation, Roost's nap, SuperSlam recoil...)
+    if (this.hasStatus('stun') && !this.isKO) {
+      this.vx *= Math.max(0, 1 - dt * 6);
+      this.setStateIfChanged('hurt');
+      this.applyPhysics(dt);
+      return;
     }
 
     switch (this.state) {
@@ -90,7 +168,9 @@ export class Fighter {
 
       case 'punch':
       case 'kick':
-      case 'special': {
+      case 'special':
+      case 'punchLow':
+      case 'kickLow': {
         this.vx = 0;
         const a = this.attack;
         if (this.stateTime >= a.startup + a.active + a.recovery) {
@@ -102,11 +182,11 @@ export class Fighter {
 
       case 'jump':
         // Mid-air jumps for fighters with more than one (RIO's triple jump)
-        if (cmd.jump && this.jumpsUsed < this.maxJumps) {
+        if (cmd.jump && this.jumpsUsed < this.currentMaxJumps()) {
           this.jumpsUsed += 1;
           this.vy = PHYSICS.jumpVelocity;
           const dir = (cmd.right ? 1 : 0) - (cmd.left ? 1 : 0);
-          if (dir !== 0) this.vx = dir * this.walkSpeed;
+          if (dir !== 0) this.vx = dir * this.currentSpeed();
         }
         // TODO: air attacks could hook in here.
         break;
@@ -126,15 +206,16 @@ export class Fighter {
       this.setStateIfChanged(cmd.crouch ? 'blockLow' : 'block');
       return;
     }
-    if (cmd.punch) return this.startAttack('punch');
-    if (cmd.kick) return this.startAttack('kick');
+    // Crouch + attack = low attack
+    if (cmd.punch) return this.startAttack(cmd.crouch ? 'punchLow' : 'punch');
+    if (cmd.kick) return this.startAttack(cmd.crouch ? 'kickLow' : 'kick');
     if (cmd.special) return this.startAttack('special');
 
-    if (cmd.jump && this.maxJumps > 0) { // GUYBO (0 jumps) stays grounded
+    if (cmd.jump && this.currentMaxJumps() > 0) { // GUYBO (0 jumps) stays grounded
       this.jumpsUsed = 1;
       this.vy = PHYSICS.jumpVelocity;
       const dir = (cmd.right ? 1 : 0) - (cmd.left ? 1 : 0);
-      this.vx = dir * this.walkSpeed;
+      this.vx = dir * this.currentSpeed();
       this.setState('jump');
       return;
     }
@@ -145,7 +226,7 @@ export class Fighter {
 
     const dir = (cmd.right ? 1 : 0) - (cmd.left ? 1 : 0);
     if (dir !== 0) {
-      this.vx = dir * this.walkSpeed;
+      this.vx = dir * this.currentSpeed();
       this.setStateIfChanged('walk');
     } else {
       this.setStateIfChanged('idle');
@@ -181,8 +262,15 @@ export class Fighter {
 
   startAttack(name) {
     const base = ATTACKS[name];
-    const damage = Math.max(1, Math.round(base.damage * this.rollDamageStat() / BASE_STAT));
-    this.attack = { name, ...base, damage };
+    let damage = base.damage * this.rollDamageStat() / BASE_STAT;
+    if (this.heatCheck) damage += this.heatCheck.bonus;   // Heat Check stacks
+    damage *= this.nextAttackDamageMult;                  // The Gambler (consumed win or lose)
+    damage *= this.statusMult('damageDealtMult');         // Frisk Frames / Medication
+    this.nextAttackDamageMult = 1;
+    const range = base.range * this.nextAttackRangeMult;  // LockJaw
+    this.nextAttackRangeMult = 1;
+
+    this.attack = { name, ...base, range, damage: Math.max(1, Math.round(damage)) };
     if (name === 'special' && this.def.special === 'fireball') {
       this.attack.projectile = true; // no melee hitbox — Game spawns the fireball
       this.attack.spawned = false;
@@ -240,26 +328,61 @@ export class Fighter {
     };
   }
 
-  // Called by Game when an enemy attack connects. Returns true if it was blocked.
-  takeHit(attack, attackerFacing) {
-    const blocked =
-      (this.state === 'block'    && (attack.height === 'high' || attack.height === 'mid')) ||
-      (this.state === 'blockLow' && (attack.height === 'low'  || attack.height === 'mid'));
+  // Raw damage that ignores blocking (DoTs, shockwaves, hazards, zones).
+  // Eats the ExoSkeleton bonus bar first.
+  applyDamage(amount) {
+    if (amount <= 0 || this.isKO) return;
+    if (this.bonusHealth > 0) {
+      const absorbed = Math.min(this.bonusHealth, amount);
+      this.bonusHealth -= absorbed;
+      amount -= absorbed;
+      if (this.bonusHealth <= 0) { // suit destroyed — regen dies with it
+        this.statuses = this.statuses.filter((s) => s.type !== 'exoregen');
+      }
+    }
+    this.health = Math.max(0, this.health - amount);
+    if (this.health <= 0) this.setState('ko');
+  }
 
-    if (blocked) {
-      this.health = Math.max(0, this.health - BLOCK_CHIP);
-      this.x += attackerFacing * BLOCK_PUSHBACK; // shoved back, but no stun
-      return true;
+  heal(amount) { this.health = Math.min(this.maxHealth, this.health + amount); }
+
+  // Called when an enemy attack connects. Returns 'hit' | 'blocked' | 'missed'.
+  // Blocking rules:
+  //   high attacks whiff entirely against crouchers (ducked under)
+  //   standing block stops high + mid · low block stops low + mid
+  //   low attacks vs a standing blocker hit for FULL damage
+  //   blocked attacks still deal 25% of their true damage
+  takeHit(attack, attackerFacing) {
+    if (this.isKO) return 'missed';
+    if (this.hasStatus('dash')) return 'missed'; // Fetch! i-frames
+    if (attack.height === 'high' && this.crouching) return 'missed'; // ducked
+
+    const blocked = !attack.unblockable && (
+      (this.state === 'block'    && (attack.height === 'high' || attack.height === 'mid')) ||
+      (this.state === 'blockLow' && (attack.height === 'low'  || attack.height === 'mid')));
+
+    if (!blocked && this.negateNextHit) { // Low Opacity
+      this.negateNextHit = false;
+      return 'missed';
     }
 
-    this.health = Math.max(0, this.health - attack.damage);
-    if (this.health <= 0) {
-      this.setState('ko');
-    } else {
+    let dmg = attack.damage * (blocked ? BLOCK_DAMAGE_MULT : 1);
+    dmg *= this.statusMult('damageTakenMult');            // Frisk Frames
+    dmg = Math.max(0, dmg - this.flatReduction);          // Better Biff
+    dmg = Math.round(dmg * 10) / 10;
+
+    if (blocked) {
+      this.applyDamage(dmg);
+      this.x += attackerFacing * BLOCK_PUSHBACK; // shoved back, but no stun
+      return 'blocked';
+    }
+
+    this.applyDamage(dmg);
+    if (!this.isKO) {
       this.setState('hurt');
       this.vx = attackerFacing * attack.knockback;
     }
-    return false;
+    return 'hit';
   }
 
   // ---- drawing -----------------------------------------------------
@@ -298,7 +421,7 @@ export class Fighter {
       ctx.arc(w * 0.22, -h * 0.85, 7, 0, Math.PI * 2);
       ctx.fill();
       // hurt flash
-      if (this.state === 'hurt') {
+      if (this.state === 'hurt' || this.hasStatus('stun')) {
         ctx.fillStyle = 'rgba(255,255,255,0.45)';
         ctx.fillRect(-w / 2, -h, w, h);
       }

@@ -3,13 +3,16 @@ import { WORLD, PROJECTILE } from './config.js';
 // A projectile in flight (DOOPY's fireball). Travels horizontally in the
 // direction its owner was facing; the Game handles collision and ducking.
 export class Projectile {
-  constructor({ x, y, dir, damage, owner, frames }) {
+  constructor({ x, y, dir, damage, owner, frames, unblockable = false, duckable = true, color }) {
     this.x = x;
     this.y = y;               // vertical center
     this.dir = dir;           // 1 = right, -1 = left
     this.damage = damage;
     this.owner = owner;
     this.frames = frames ?? [];
+    this.unblockable = unblockable; // BIG BIFF's Logic ignores blocking
+    this.duckable = duckable;       // false = crouching doesn't dodge it
+    this.color = color;             // placeholder ball color
     this.time = 0;
     this.active = true;
 
@@ -39,7 +42,7 @@ export class Projectile {
       ctx.drawImage(frame, -this.w / 2, -this.h / 2, this.w, this.h);
     } else {
       // placeholder ball for fighters without projectile art yet
-      ctx.fillStyle = '#ff9f1c';
+      ctx.fillStyle = this.color ?? '#ff9f1c';
       ctx.beginPath();
       ctx.arc(0, 0, 18, 0, Math.PI * 2);
       ctx.fill();

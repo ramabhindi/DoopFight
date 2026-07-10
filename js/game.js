@@ -1,4 +1,4 @@
-import { CANVAS, WORLD, CAMERA, MATCH, FIGHTER_SIZE, FIGHTERS, PROJECTILE } from './config.js';
+import { CANVAS, WORLD, CAMERA, MATCH, FIGHTER_SIZE, FIGHTERS, PROJECTILE, CHARGE, STAGE } from './config.js';
 import { KEYMAPS } from './config.js';
 import { Fighter } from './fighter.js';
 import { KeyboardController } from './controllers/keyboard.js';
@@ -10,10 +10,11 @@ import { CharacterSelect } from './select.js';
 import { FighterInfo } from './info.js';
 import { Projectile } from './projectile.js';
 import { loadFighterAnimations, loadPrefixedFrames } from './sprites.js';
+import { SUPERS, getEquipped, applySuper } from './supers.js';
 
 const NEUTRAL = {
   left: false, right: false, crouch: false, block: false,
-  jump: false, punch: false, kick: false, special: false,
+  jump: false, punch: false, kick: false, special: false, superAtk: false,
 };
 
 function rectsOverlap(a, b) {
@@ -34,11 +35,14 @@ export class Game {
     this.info = null;
     this.p2Type = 'ai';    // 'ai' | 'human'
     this.loading = false;  // true while fighter sprites load after select
-    this.projectiles = []; // live fireballs
+    this.projectiles = []; // live fireballs / calculations
+    this.zones = [];       // UltraViolet's light rays
+    this.hazards = [];     // Mister Maxey's shop vac debris
 
     this.state = 'menu';
     this.stateTime = 0;
     this.banner = '';
+    this.bannerTime = 0;
     this.fighters = [];
     this.controllers = [];
     this.wins = [0, 0];
@@ -51,6 +55,11 @@ export class Game {
   setState(name) {
     this.state = name;
     this.stateTime = 0;
+  }
+
+  flashBanner(text, time = 1.4) {
+    this.banner = text;
+    this.bannerTime = time;
   }
 
   beginMenu() {
@@ -93,6 +102,9 @@ export class Game {
     });
     f1.projectileFrames = p1.fireball;
     f2.projectileFrames = p2.fireball;
+    // Equipped supers (chosen in the Fighter Info screen)
+    f1.superDef = SUPERS[p1.def.slug][getEquipped(p1.def.slug)];
+    f2.superDef = SUPERS[p2.def.slug][getEquipped(p2.def.slug)];
     this.fighters = [f1, f2];
     this.controllers = [
       new KeyboardController(this.keyboard, KEYMAPS.p1),
@@ -109,6 +121,8 @@ export class Game {
     this.fighters[1].resetForRound(WORLD.width / 2 + 240, -1);
     for (const f of this.fighters) f.roundNumber = this.round; // SPINMAN's multiplier
     this.projectiles = [];
+    this.zones = [];
+    this.hazards = [];
     this.timer = MATCH.roundTime;
     this.banner = `ROUND ${this.round}`;
     this.camX = this.cameraTarget(); // snap, don't pan, on round start
@@ -158,18 +172,22 @@ export class Game {
       case 'roundStart':
         this.updateFighters(dt, true); // frozen: physics/animation only
         if (this.stateTime >= 1.2) {
-          this.banner = 'FIGHT!';
+          this.flashBanner('FIGHT!', 0.8);
           this.setState('fighting');
         }
         break;
 
       case 'fighting':
-        if (this.stateTime > 0.8) this.banner = ''; // let "FIGHT!" linger briefly
+        this.bannerTime -= dt;
+        if (this.bannerTime <= 0) this.banner = '';
         this.updateFighters(dt, false);
         this.separateBodies();
         this.resolveHits(this.fighters[0], this.fighters[1]);
         this.resolveHits(this.fighters[1], this.fighters[0]);
+        this.resolveDashHits();
         this.updateProjectiles(dt);
+        this.updateZones(dt);
+        this.updateHazards();
 
         this.timer -= dt;
         if (this.fighters.some((f) => f.isKO)) this.endRound('KO!');
@@ -201,10 +219,26 @@ export class Game {
   // frozen = true keeps gravity + animations running but ignores player input
   updateFighters(dt, frozen) {
     const [a, b] = this.fighters;
-    const cmdA = frozen ? NEUTRAL : this.controllers[0].getCommands(dt);
-    const cmdB = frozen ? NEUTRAL : this.controllers[1].getCommands(dt);
+    const cmdA = frozen ? NEUTRAL : this.adjustCommands(a, this.controllers[0].getCommands(dt));
+    const cmdB = frozen ? NEUTRAL : this.adjustCommands(b, this.controllers[1].getCommands(dt));
     a.update(dt, cmdA, b);
     b.update(dt, cmdB, a);
+    if (!frozen) {
+      if (cmdA.superAtk) this.tryActivateSuper(0);
+      if (cmdB.superAtk) this.tryActivateSuper(1);
+    }
+  }
+
+  // Status effects that mess with a fighter's inputs (supers)
+  adjustCommands(fighter, cmd) {
+    let out = cmd;
+    if (fighter.hasStatus('invertControls')) { // GEEZER's Dementia
+      out = { ...out, left: out.right, right: out.left };
+    }
+    if (fighter.hasStatus('forceCrouch')) {    // SLAM's Stay Down
+      out = { ...out, crouch: true, jump: false };
+    }
+    return out;
   }
 
   // Fighters can't stand inside each other — push them apart.
@@ -220,8 +254,105 @@ export class Game {
     }
   }
 
+  tryActivateSuper(i) {
+    const f = this.fighters[i];
+    const opp = this.fighters[1 - i];
+    if (!f.superReady || !f.canAct() || f.isKO) return;
+    f.charge = 0;
+    applySuper(this, f, opp, f.superDef);
+    this.flashBanner(`${f.superDef.name.toUpperCase()}!`);
+  }
+
+  // ---- super battlefield helpers ------------------------------------
+
+  // Charge gains: land unblocked +1 · land blocked +0.25 ·
+  // block an attack +0.25 · receive unblocked +0.5
+  awardCharges(attacker, defender, result) {
+    if (result === 'hit') {
+      attacker.chargeLocked = false; // RB Locks lifts on landing an unblocked hit
+      this.addCharge(attacker, CHARGE.landUnblocked);
+      this.addCharge(defender, CHARGE.receiveUnblocked);
+      if (attacker.heatCheck) attacker.heatCheck.bonus += 5;
+      if (defender.heatCheck) defender.heatCheck = null; // Heat Check ends when hit unblocked
+    } else if (result === 'blocked') {
+      this.addCharge(attacker, CHARGE.landBlocked);
+      this.addCharge(defender, CHARGE.blockAttack);
+      if (attacker.heatCheck) attacker.heatCheck.bonus += 5; // "blocked or not"
+    }
+  }
+
+  addCharge(f, amount) {
+    if (f.chargeLocked || !f.superDef) return;
+    f.charge = Math.min(f.superDef.charges, f.charge + amount);
+  }
+
+  spawnSuperProjectile(owner, opts) {
+    this.projectiles.push(new Projectile({
+      x: owner.x + owner.facing * (FIGHTER_SIZE.width / 2 + 30),
+      y: owner.y - FIGHTER_SIZE.crouchHeight * 0.5, // low enough that crouching can't dodge it
+      dir: owner.facing,
+      owner,
+      frames: [],
+      ...opts,
+    }));
+  }
+
+  spawnZones(owner, mode) { // UltraViolet's Stage Lights / UV Lights
+    for (let i = 0; i < 2; i++) {
+      this.zones.push({
+        x: 300 + Math.random() * (WORLD.width - 600),
+        w: 150, time: 30, mode, owner,
+      });
+    }
+  }
+
+  spawnHazards(owner) { // Mister Maxey's Shop Vac Reversal
+    for (let i = 0; i < 6; i++) {
+      this.hazards.push({ x: 200 + Math.random() * (WORLD.width - 400), owner });
+    }
+  }
+
+  updateZones(dt) {
+    for (const z of this.zones) {
+      z.time -= dt;
+      for (const f of this.fighters) {
+        if (f.isKO || Math.abs(f.x - z.x) > z.w / 2) continue;
+        if (z.mode === 'heal' && f === z.owner) f.heal(5 * dt);
+        if (z.mode === 'hurt' && f !== z.owner) f.applyDamage(5 * dt);
+      }
+    }
+    this.zones = this.zones.filter((z) => z.time > 0);
+  }
+
+  updateHazards() {
+    this.hazards = this.hazards.filter((hz) => {
+      const target = this.fighters.find((f) => f !== hz.owner);
+      if (target && target.grounded && !target.isKO && Math.abs(target.x - hz.x) < 45) {
+        target.applyDamage(5); // stepped on debris (jump over it!)
+        return false;
+      }
+      return true;
+    });
+  }
+
+  // MALU's Fetch! dash: damages an opponent it passes through (once)
+  resolveDashHits() {
+    for (const f of this.fighters) {
+      const dash = f.getStatus('dash');
+      if (!dash || dash.data.hasHit) continue;
+      const opp = this.fighters.find((o) => o !== f);
+      if (rectsOverlap(f.hurtbox(), opp.hurtbox())) {
+        dash.data.hasHit = true;
+        const result = opp.takeHit(
+          { name: 'fetch', damage: 20, height: 'mid', knockback: 260 }, dash.data.dir);
+        this.awardCharges(f, opp, result);
+      }
+    }
+  }
+
   // Fireballs: spawn them when a projectile special's startup ends,
-  // fly them across the stage, and resolve hits. Ducking dodges them.
+  // fly them across the stage, and resolve hits. Ducking dodges them
+  // (unless the projectile says otherwise — BIG BIFF's Logic).
   updateProjectiles(dt) {
     const [a, b] = this.fighters;
 
@@ -243,14 +374,18 @@ export class Game {
     for (const p of this.projectiles) {
       p.update(dt);
       const target = p.owner === a ? b : a;
-      // Crouching (holding S / Down) ducks under the fireball entirely
-      if (p.active && !target.crouching && !target.isKO &&
+      const ducked = p.duckable && target.crouching;
+      if (p.active && !ducked && !target.isKO &&
           rectsOverlap(p.rect(), target.hurtbox())) {
-        target.takeHit(
-          { name: 'fireball', damage: p.damage, height: 'high', knockback: PROJECTILE.knockback },
+        const result = target.takeHit(
+          { name: 'projectile', damage: p.damage, height: p.duckable ? 'high' : 'mid',
+            knockback: PROJECTILE.knockback, unblockable: p.unblockable },
           p.dir,
         );
-        p.active = false;
+        if (result !== 'missed') {
+          this.awardCharges(p.owner, target, result);
+          p.active = false;
+        }
       }
     }
     this.projectiles = this.projectiles.filter((p) => p.active);
@@ -259,8 +394,11 @@ export class Game {
   resolveHits(attacker, defender) {
     if (!attacker.isAttackActive()) return;
     if (!rectsOverlap(attacker.hitbox(), defender.hurtbox())) return;
+    const result = defender.takeHit(attacker.attack, attacker.facing);
+    // A ducked-under punch stays live — it can still connect if they stand up
+    if (result === 'missed') return;
     attacker.attackHasHit = true;
-    defender.takeHit(attacker.attack, attacker.facing);
+    this.awardCharges(attacker, defender, result);
     // TODO: hit sparks, sound effects, screen shake go here
   }
 
@@ -296,6 +434,8 @@ export class Game {
     // Fighters and projectiles live in world space; shift them by the camera
     ctx.save();
     ctx.translate(-this.camX, 0);
+    this.drawZones(ctx);
+    this.drawHazards(ctx);
     for (const f of this.fighters) f.draw(ctx);
     for (const p of this.projectiles) p.draw(ctx);
     ctx.restore();
@@ -304,11 +444,32 @@ export class Game {
     this.stage.drawForeground(ctx, this.camX);
 
     this.ui.drawHUD(ctx, this);
+    this.ui.drawSuperMeters(ctx, this);
 
     if (this.state === 'matchEnd') {
       this.ui.drawMatchEnd(ctx, this.matchWinner.name);
     } else {
       this.ui.drawBanner(ctx, this.banner);
+    }
+  }
+
+  drawZones(ctx) {
+    for (const z of this.zones) {
+      const grad = ctx.createLinearGradient(0, 0, 0, STAGE.floorY);
+      const c = z.mode === 'heal' ? '255, 235, 130' : '170, 80, 255';
+      grad.addColorStop(0, `rgba(${c}, 0.55)`);
+      grad.addColorStop(1, `rgba(${c}, 0.15)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(z.x - z.w / 2, 0, z.w, STAGE.floorY);
+    }
+  }
+
+  drawHazards(ctx) {
+    ctx.fillStyle = '#9aa0a6';
+    for (const hz of this.hazards) {
+      ctx.beginPath();
+      ctx.arc(hz.x, STAGE.floorY - 8, 9, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 }

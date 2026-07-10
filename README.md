@@ -22,7 +22,11 @@ The page auto-reloads whenever you save code or drop in new sprite frames.
 | Special    | H         | /           |
 | Block      | Left Shift| Right Shift |
 
-**Block + Crouch = low block.** Standing block stops high/mid attacks; low block stops low/mid attacks.
+**Super attack: Q (P1) / M (P2)** once the corner meter fills. Charges: land an unblocked hit +1, land a blocked hit +0.25, block a hit +0.25, get hit unblocked +0.5. Every fighter has two supers — equip one in Fighter Info (SHIFT on a fighter).
+
+**Crouch + Punch/Kick = low attack.** Low attacks beat a standing block (full damage).
+
+**Block + Crouch = low block.** Standing block stops high/mid attacks; low block stops low/mid and ducks under standing punches entirely. Blocked attacks still take 25% of the damage.
 
 On the title screen, move the golden frame with W/S (or ↑/↓) and confirm with **SHIFT**: Single Player, Multiplayer, or Fighter Info. 99-second rounds, first to 2 round wins.
 

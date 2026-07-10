@@ -1,12 +1,16 @@
 import { CANVAS, FIGHTERS } from './config.js';
 import { loadImage } from './sprites.js';
+import { SUPERS, getEquipped, setEquipped } from './supers.js';
 
 const FONT = '"Segoe UI", system-ui, sans-serif';
 
 // ---------------------------------------------------------------
 // Fighter Info screen (see docs/diagram): a scrollable 2x3 grid on
 // the left, the fighter displayed in the middle, and a stats panel
-// (Health / Speed / Damage bars) + description on the right.
+// (Health / Speed / Damage bars) + description on the right, with
+// the fighter's two SUPER ATTACKS below. SHIFT on a fighter jumps
+// the golden frame to the super squares to change which is equipped
+// (the equipped one glows; the other is grayed out).
 // WASD/arrows browse, the grid scrolls to reach all 12, ESC goes back.
 // ---------------------------------------------------------------
 
@@ -25,6 +29,11 @@ const PANEL_H = 235;
 const BAR_X = PANEL_X + 110;
 const BAR_MAX_W = 165;
 
+// Super squares (right column, under the description)
+const SQ_SIZE = 62;
+const SQ_Y = 496;
+const SQ_X = [PANEL_X + PANEL_W / 2 - SQ_SIZE - 12, PANEL_X + PANEL_W / 2 + 12];
+
 // Auto bar color when the roster entry doesn't specify one.
 function statColor(v) {
   if (v >= 85) return '#2ecc40';
@@ -37,17 +46,41 @@ export class FighterInfo {
   constructor(keyboard) {
     this.keyboard = keyboard;
     this.cursor = 0;
-    this.rowOffset = 0; // first visible grid row (0..TOTAL_ROWS-VISIBLE_ROWS)
-    this.time = 0;      // drives BIG BIFF's cycling bar / SPINMAN's flashing number
+    this.rowOffset = 0;  // first visible grid row (0..TOTAL_ROWS-VISIBLE_ROWS)
+    this.mode = 'grid';  // 'grid' | 'supers' (golden frame on the super squares)
+    this.superCursor = 0;
+    this.time = 0;       // drives BIG BIFF's cycling bar / SPINMAN's flashing number
     this.exit = false;
 
     this.frameImg = null;
     loadImage('assets/ui/frame.png').then((img) => { this.frameImg = img; });
+
+    // Optional hand-drawn super icons: assets/ui/supers/<id>.png
+    this.icons = {};
+    for (const supers of Object.values(SUPERS)) {
+      for (const s of supers) {
+        loadImage(`assets/ui/supers/${s.id}.png`).then((img) => { this.icons[s.id] = img; });
+      }
+    }
   }
 
   update(dt) {
     this.time += dt;
     const kb = this.keyboard;
+    const slug = FIGHTERS[this.cursor].slug;
+
+    if (this.mode === 'supers') {
+      if (kb.wasPressed('KeyA') || kb.wasPressed('ArrowLeft') ||
+          kb.wasPressed('KeyD') || kb.wasPressed('ArrowRight')) {
+        this.superCursor = 1 - this.superCursor;
+      }
+      if (kb.wasPressed('ShiftLeft') || kb.wasPressed('ShiftRight')) {
+        setEquipped(slug, this.superCursor); // equip and hop back to the grid
+        this.mode = 'grid';
+      }
+      if (kb.wasPressed('Escape')) this.mode = 'grid';
+      return;
+    }
 
     let row = Math.floor(this.cursor / 2);
     let col = this.cursor % 2;
@@ -60,6 +93,12 @@ export class FighterInfo {
     // Scroll the grid so the cursor stays visible
     if (row < this.rowOffset) this.rowOffset = row;
     if (row > this.rowOffset + VISIBLE_ROWS - 1) this.rowOffset = row - VISIBLE_ROWS + 1;
+
+    // SHIFT: move the golden frame onto this fighter's super squares
+    if (kb.wasPressed('ShiftLeft') || kb.wasPressed('ShiftRight')) {
+      this.mode = 'supers';
+      this.superCursor = getEquipped(slug);
+    }
 
     if (kb.wasPressed('Escape')) this.exit = true;
   }
@@ -85,7 +124,7 @@ export class FighterInfo {
 
     // Display fighter placeholder (big colored body with the eye dot)
     // TODO: swap for hand-drawn full-body art
-    const dx = 480, dy = 210, dw = 220, dh = 420;
+    const dx = 480, dy = 190, dw = 220, dh = 350;
     ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.fillRect(dx - 8, dy - 8, dw + 16, dh + 16);
     ctx.fillStyle = f.color;
@@ -97,11 +136,15 @@ export class FighterInfo {
 
     this.drawStatsPanel(ctx, f);
     this.drawDescription(ctx, f);
+    this.drawSupers(ctx, f);
 
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     ctx.font = `18px ${FONT}`;
-    ctx.fillText('WASD / Arrow Keys to browse  ·  ESC back to menu', CANVAS.width / 2, CANVAS.height - 14);
+    const hint = this.mode === 'supers'
+      ? 'A/D choose super  ·  SHIFT equip  ·  ESC back to fighters'
+      : 'WASD / Arrows browse  ·  SHIFT change super  ·  ESC back to menu';
+    ctx.fillText(hint, CANVAS.width / 2, CANVAS.height - 14);
   }
 
   drawGrid(ctx) {
@@ -126,7 +169,15 @@ export class FighterInfo {
         ctx.font = `bold 13px ${FONT}`;
         ctx.fillText(f.name, x + CELL_W / 2, y + CELL_H - 10);
 
-        if (i === this.cursor) this.drawCursorFrame(ctx, x, y, CELL_W, CELL_H);
+        if (this.mode === 'grid' && i === this.cursor) {
+          this.drawCursorFrame(ctx, x, y, CELL_W, CELL_H);
+        }
+        if (this.mode === 'supers' && i === this.cursor) {
+          // faint marker so you remember whose supers you're editing
+          ctx.strokeStyle = 'rgba(255, 210, 62, 0.5)';
+          ctx.lineWidth = 3;
+          ctx.strokeRect(x - 2, y - 2, CELL_W + 4, CELL_H + 4);
+        }
       }
     }
 
@@ -151,6 +202,102 @@ export class FighterInfo {
     ctx.lineWidth = 5;
     ctx.strokeRect(x - 2, y - 2, w + 4, h + 4);
   }
+
+  // ---- super attacks section ----------------------------------------
+
+  drawSupers(ctx, f) {
+    const supers = SUPERS[f.slug];
+    if (!supers) return;
+    const equippedIdx = getEquipped(f.slug);
+    // Hovering shows that super; otherwise the section shows the equipped one
+    const shownIdx = this.mode === 'supers' ? this.superCursor : equippedIdx;
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.font = `bold 20px ${FONT}`;
+    ctx.fillText('Super Attacks', PANEL_X + PANEL_W / 2, SQ_Y - 14);
+
+    for (let i = 0; i < 2; i++) {
+      const x = SQ_X[i];
+      const s = supers[i];
+
+      // icon (hand-drawn if present, else colored square with initials)
+      const icon = this.icons[s.id];
+      if (icon) {
+        ctx.drawImage(icon, x, SQ_Y, SQ_SIZE, SQ_SIZE);
+      } else {
+        ctx.fillStyle = f.color;
+        ctx.fillRect(x, SQ_Y, SQ_SIZE, SQ_SIZE);
+        ctx.fillStyle = '#111';
+        ctx.font = `bold 22px ${FONT}`;
+        ctx.fillText(s.name.split(' ').map((w) => w[0]).join('').slice(0, 3),
+          x + SQ_SIZE / 2, SQ_Y + SQ_SIZE / 2 + 8);
+      }
+
+      if (i === equippedIdx) {
+        // equipped: glowing golden frame
+        const pulse = 0.55 + 0.45 * Math.sin(this.time * 5);
+        ctx.save();
+        ctx.shadowColor = '#ffd23e';
+        ctx.shadowBlur = 14 + 8 * pulse;
+        ctx.strokeStyle = '#ffd23e';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(x - 3, SQ_Y - 3, SQ_SIZE + 6, SQ_SIZE + 6);
+        ctx.restore();
+      } else {
+        // unequipped: grayed out
+        ctx.fillStyle = 'rgba(20, 16, 28, 0.62)';
+        ctx.fillRect(x, SQ_Y, SQ_SIZE, SQ_SIZE);
+        ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, SQ_Y, SQ_SIZE, SQ_SIZE);
+      }
+
+      // golden navigation frame while choosing
+      if (this.mode === 'supers' && i === this.superCursor) {
+        this.drawCursorFrame(ctx, x - 4, SQ_Y - 4, SQ_SIZE + 8, SQ_SIZE + 8);
+      }
+    }
+
+    // Name (underlined), description, and charge cost of the shown super
+    const s = supers[shownIdx];
+    const nameX = 640, nameY = 596;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold 24px ${FONT}`;
+    ctx.fillText(s.name, nameX, nameY);
+    const nw = ctx.measureText(s.name).width;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(nameX - nw / 2 - 6, nameY + 6);
+    ctx.lineTo(nameX + nw / 2 + 6, nameY + 6);
+    ctx.stroke();
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.font = `16px ${FONT}`;
+    const text = `${s.desc} Needs ${s.charges} charges.`;
+    this.wrapText(ctx, text, 385, nameY + 28, 510, 21);
+  }
+
+  wrapText(ctx, text, x, y, maxW, lineH) {
+    const words = text.split(' ');
+    let line = '';
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      if (ctx.measureText(test).width > maxW && line) {
+        ctx.fillText(line, x, y);
+        line = word;
+        y += lineH;
+      } else {
+        line = test;
+      }
+    }
+    if (line) ctx.fillText(line, x, y);
+  }
+
+  // ---- stats + description -------------------------------------------
 
   drawStatsPanel(ctx, f) {
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
@@ -215,20 +362,7 @@ export class FighterInfo {
 
     ctx.textAlign = 'left';
     ctx.fillStyle = '#fff';
-    ctx.font = `17px ${FONT}`;
-    const words = f.desc.split(' ');
-    let line = '';
-    let y = PANEL_Y + PANEL_H + 74;
-    for (const word of words) {
-      const test = line ? `${line} ${word}` : word;
-      if (ctx.measureText(test).width > PANEL_W - 10 && line) {
-        ctx.fillText(line, PANEL_X + 5, y);
-        line = word;
-        y += 25;
-      } else {
-        line = test;
-      }
-    }
-    if (line) ctx.fillText(line, PANEL_X + 5, y);
+    ctx.font = `15px ${FONT}`;
+    this.wrapText(ctx, f.desc, PANEL_X + 5, PANEL_Y + PANEL_H + 70, PANEL_W - 10, 20);
   }
 }

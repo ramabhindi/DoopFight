@@ -17,6 +17,7 @@ export class KeyboardController {
       punch: kb.wasPressed(m.punch),
       kick: kb.wasPressed(m.kick),
       special: kb.wasPressed(m.special),
+      superAtk: kb.wasPressed(m.superAtk),
     };
   }
 }

@@ -41,14 +41,26 @@ export const MATCH = {
 //   standing block stops high + mid, low block (Shift+crouch) stops low + mid.
 // ------------------------------------------------------------
 export const ATTACKS = {
-  punch:   { damage: 8,  range: 110, height: 'high', startup: 0.08, active: 0.10, recovery: 0.18, knockback: 120 },
-  kick:    { damage: 12, range: 145, height: 'mid',  startup: 0.14, active: 0.12, recovery: 0.26, knockback: 220 },
-  special: { damage: 20, range: 175, height: 'low',  startup: 0.30, active: 0.15, recovery: 0.45, knockback: 400 },
+  punch:    { damage: 8,  range: 110, height: 'high', startup: 0.08, active: 0.10, recovery: 0.18, knockback: 120 },
+  kick:     { damage: 12, range: 145, height: 'mid',  startup: 0.14, active: 0.12, recovery: 0.26, knockback: 220 },
+  special:  { damage: 20, range: 175, height: 'low',  startup: 0.30, active: 0.15, recovery: 0.45, knockback: 400 },
+  // Low attacks: punch/kick while holding crouch. They hit LOW, so a
+  // standing blocker takes full ("unblocked") damage — only low block stops them.
+  punchLow: { damage: 7,  range: 115, height: 'low',  startup: 0.09, active: 0.10, recovery: 0.20, knockback: 100 },
+  kickLow:  { damage: 10, range: 150, height: 'low',  startup: 0.15, active: 0.12, recovery: 0.28, knockback: 180 },
 };
 
 export const HURT_TIME = 0.35;   // hit-stun duration (seconds)
-export const BLOCK_CHIP = 0;     // damage taken through a successful block
+export const BLOCK_DAMAGE_MULT = 0.25; // blocked attacks still deal 25% of their true damage
 export const BLOCK_PUSHBACK = 90; // how far a blocked hit shoves the defender
+
+// Super meter charge gains (1 charge = 1 unblocked hit landed)
+export const CHARGE = {
+  landUnblocked: 1,
+  landBlocked: 0.25,
+  blockAttack: 0.25,
+  receiveUnblocked: 0.5,
+};
 
 // Body collision box, used for hits and pushing until you tune per-sprite.
 export const FIGHTER_SIZE = { width: 110, height: 260, crouchHeight: 170 };
@@ -64,10 +76,12 @@ export const KEYMAPS = {
   p1: {
     left: 'KeyA', right: 'KeyD', jump: 'KeyW', crouch: 'KeyS',
     block: 'ShiftLeft', punch: 'KeyF', kick: 'KeyG', special: 'KeyH',
+    superAtk: 'KeyQ',
   },
   p2: {
     left: 'ArrowLeft', right: 'ArrowRight', jump: 'ArrowUp', crouch: 'ArrowDown',
     block: 'ShiftRight', punch: 'Comma', kick: 'Period', special: 'Slash',
+    superAtk: 'KeyM',
   },
 };
 
@@ -165,7 +179,7 @@ export const PROJECTILE = {
 // ------------------------------------------------------------
 export const ANIMATION_NAMES = [
   'idle', 'walk', 'jump', 'crouch', 'block', 'blockLow',
-  'punch', 'kick', 'special', 'hurt', 'ko',
+  'punch', 'kick', 'special', 'punchLow', 'kickLow', 'hurt', 'ko',
 ];
 
 export const ANIMATION_DEFAULTS = { fps: 10, loop: true };
