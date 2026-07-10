@@ -9,6 +9,7 @@ import { MainMenu } from './menu.js';
 import { CharacterSelect } from './select.js';
 import { FighterInfo } from './info.js';
 import { ModeSelect } from './modeselect.js';
+import { LoadingScreen } from './loading.js';
 import { Projectile } from './projectile.js';
 import { loadFighterAnimations, loadPrefixedFrames } from './sprites.js';
 import { SUPERS, getEquipped, applySuper } from './supers.js';
@@ -33,6 +34,7 @@ export class Game {
     this.stage = new Stage();
     this.ui = new UI();
     this.menu = new MainMenu(keyboard);
+    this.loadingScreen = new LoadingScreen();
     this.select = null;
     this.info = null;
     this.modeSelect = null;
@@ -42,7 +44,7 @@ export class Game {
     this.zones = [];       // UltraViolet's light rays
     this.hazards = [];     // Mister Maxey's shop vac debris
 
-    this.state = 'menu';
+    this.state = 'loading';
     this.stateTime = 0;
     this.banner = '';
     this.bannerTime = 0;
@@ -55,7 +57,14 @@ export class Game {
     this.camX = 0; // camera scroll, follows the fighters
 
     this.lobbyMusic = new Music('assets/audio/Lobbymusic.mp3');
-    this.lobbyMusic.restart();
+  }
+
+  // All the title screen's own assets: background frames, button frames, music.
+  // (Fighter sprites etc. load on demand after character select, same as before.)
+  titleAssetsReady() {
+    return this.menu.bgFrames.length > 0 &&
+      this.menu.buttons.every((b) => b.frames.length > 0) &&
+      this.lobbyMusic.loaded;
   }
 
   setState(name) {
@@ -158,6 +167,11 @@ export class Game {
     this.stateTime += dt;
 
     switch (this.state) {
+      case 'loading':
+        this.loadingScreen.update(dt, this.keyboard, this.titleAssetsReady());
+        if (this.loadingScreen.done) this.beginMenu();
+        break;
+
       case 'menu':
         this.menu.update(dt);
         if (this.menu.choice === 'play') this.beginModeSelect();
@@ -436,6 +450,10 @@ export class Game {
     ctx.clearRect(0, 0, CANVAS.width, CANVAS.height);
     this.stage.drawBackground(ctx, this.camX);
 
+    if (this.state === 'loading') {
+      this.loadingScreen.draw(ctx, this.titleAssetsReady());
+      return;
+    }
     if (this.state === 'menu') {
       this.menu.draw(ctx);
       return;

@@ -19,6 +19,7 @@ export class Keyboard {
 
   isDown(code) { return this.down.has(code); }
   wasPressed(code) { return this.pressed.has(code); }
+  anyPressed() { return this.pressed.size > 0; }
 
   // Call once at the end of every frame.
   endFrame() { this.pressed.clear(); }

@@ -6,6 +6,9 @@ export class Music {
     this.audio = new Audio(src);
     this.audio.loop = true;
     this.audio.volume = volume;
+
+    this.loaded = false;
+    this.audio.addEventListener('canplaythrough', () => { this.loaded = true; }, { once: true });
   }
 
   play() {
