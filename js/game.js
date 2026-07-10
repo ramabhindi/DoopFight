@@ -8,9 +8,11 @@ import { UI } from './ui.js';
 import { MainMenu } from './menu.js';
 import { CharacterSelect } from './select.js';
 import { FighterInfo } from './info.js';
+import { ModeSelect } from './modeselect.js';
 import { Projectile } from './projectile.js';
 import { loadFighterAnimations, loadPrefixedFrames } from './sprites.js';
 import { SUPERS, getEquipped, applySuper } from './supers.js';
+import { Music } from './audio.js';
 
 const NEUTRAL = {
   left: false, right: false, crouch: false, block: false,
@@ -33,6 +35,7 @@ export class Game {
     this.menu = new MainMenu(keyboard);
     this.select = null;
     this.info = null;
+    this.modeSelect = null;
     this.p2Type = 'ai';    // 'ai' | 'human'
     this.loading = false;  // true while fighter sprites load after select
     this.projectiles = []; // live fireballs / calculations
@@ -50,6 +53,9 @@ export class Game {
     this.timer = MATCH.roundTime;
     this.matchWinner = null;
     this.camX = 0; // camera scroll, follows the fighters
+
+    this.lobbyMusic = new Music('assets/audio/Lobbymusic.mp3');
+    this.lobbyMusic.restart();
   }
 
   setState(name) {
@@ -65,6 +71,12 @@ export class Game {
   beginMenu() {
     this.menu = new MainMenu(this.keyboard);
     this.setState('menu');
+    this.lobbyMusic.restart();
+  }
+
+  beginModeSelect() {
+    this.modeSelect = new ModeSelect(this.keyboard);
+    this.setState('modeSelect');
   }
 
   beginSelect(p2Type) {
@@ -147,13 +159,19 @@ export class Game {
 
     switch (this.state) {
       case 'menu':
-        this.menu.update();
-        if (this.menu.choice === 'single') this.beginSelect('ai');
-        else if (this.menu.choice === 'multi') this.beginSelect('human');
-        else if (this.menu.choice === 'info') {
+        this.menu.update(dt);
+        if (this.menu.choice === 'play') this.beginModeSelect();
+        else if (this.menu.choice === 'roster') {
           this.info = new FighterInfo(this.keyboard);
           this.setState('info');
         }
+        break;
+
+      case 'modeSelect':
+        this.modeSelect.update(dt);
+        if (this.modeSelect.choice === 'story' || this.modeSelect.choice === 'cpu') this.beginSelect('ai');
+        else if (this.modeSelect.choice === 'versus') this.beginSelect('human');
+        else if (this.modeSelect.exit) this.beginMenu();
         break;
 
       case 'info':
@@ -420,6 +438,10 @@ export class Game {
 
     if (this.state === 'menu') {
       this.menu.draw(ctx);
+      return;
+    }
+    if (this.state === 'modeSelect') {
+      this.modeSelect.draw(ctx);
       return;
     }
     if (this.state === 'select') {
