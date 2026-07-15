@@ -36,9 +36,9 @@ export const MAPS = [
   },
   {
     id: 'nightclub', name: 'The Nightclub', thumbnail: 'assets/stages/ThumbnailDiscoDance.png',
-    background: { type: 'animated', prefix: 'DiscoDanceBG', fps: 10 },
-    ground: { type: 'animated', prefix: 'DiscoDanceGround', fps: 10, yOffset: 25 },
-    foreground: { type: 'animated', prefix: 'DiscoDanceForeground', fps: 10 },
+    background: { type: 'animated', prefix: 'DiscoDanceBG', fps: 20 },
+    ground: { type: 'animated', prefix: 'DiscoDanceGround', fps: 20, yOffset: 25 },
+    foreground: { type: 'animated', prefix: 'DiscoDanceForeground', fps: 20 },
     music: 'assets/audio/NightClub_SoundTrack.mp3',
   },
   { id: 'casino', name: 'The Casino', thumbnail: null, background: null, ground: null, foreground: null, music: null },
@@ -50,7 +50,9 @@ export const MAPS = [
 export const PHYSICS = {
   gravity: 3000,      // px/s^2
   walkSpeed: 320,     // px/s
-  jumpVelocity: -1050, // px/s (negative = up)
+  // Apex height = v^2/(2*gravity); raised so a jump clears FIGHTER_SIZE.height (260)
+  // with room to spare, since fighters can now jump over each other and switch sides.
+  jumpVelocity: -1350, // px/s (negative = up)
 };
 
 export const MATCH = {

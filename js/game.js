@@ -303,6 +303,7 @@ export class Game {
   // Fighters can't stand inside each other — push them apart.
   separateBodies() {
     const [a, b] = this.fighters;
+    if (!a.grounded || !b.grounded) return; // a fighter mid-jump can cross over and switch sides
     const gap = Math.abs(a.x - b.x);
     const minGap = FIGHTER_SIZE.width;
     if (gap < minGap) {

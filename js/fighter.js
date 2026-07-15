@@ -97,6 +97,13 @@ export class Fighter {
       !this.hasStatus('stun') && !this.hasStatus('dash');
   }
 
+  // Like canAct, but allows 'jump' — a fighter can turn to face the
+  // opponent mid-air, which is how they visibly flip when jumping over them.
+  canTurn() {
+    return !['hurt', 'ko', ...ATTACK_STATES].includes(this.state) &&
+      !this.hasStatus('stun') && !this.hasStatus('dash');
+  }
+
   // ---- status effects ----------------------------------------------
 
   addStatus(type, time, data = {}) { this.statuses.push({ type, time, data }); }
@@ -134,8 +141,9 @@ export class Fighter {
     this.animator.update(dt);
     this.tickStatuses(dt);
 
-    // Always turn toward the opponent when free to act on the ground
-    if (this.grounded && this.canAct()) {
+    // Always turn toward the opponent when free to (including mid-air,
+    // so a fighter jumping over the opponent visibly flips to face them)
+    if (this.canTurn()) {
       this.facing = opponent.x >= this.x ? 1 : -1;
     }
 

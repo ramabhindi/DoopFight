@@ -33,11 +33,19 @@ const BUTTONS = [
 ];
 
 const BTN_X = 40;
+const BTN_W = 391;
 const FIRST_Y = 280;
 const SPACING = 104;
 const HOVER_FRAMES = 4;   // frames 1-4 on top of the base frame 0
-const HOVER_RATE = 10;    // frames per second, matches the game's 10fps convention
+const HOVER_RATE = 16;    // frames per second for the light-up/down transition
 const FADE_DURATION = 1;  // seconds for a button to reach full opacity
+
+// When PLAY is confirmed, all 4 buttons slide off to the left before the
+// game advances to mode select — bottom to top, starting with Credits
+// (the reverse of the fade-in order, and independent of it: FADE_DURATION
+// above is untouched).
+const EXIT_STAGGER = 0.15;       // seconds between each button starting to slide
+const EXIT_SLIDE_DURATION = 0.35; // seconds for one button to slide fully off
 
 async function loadButtonFrames(prefix) {
   const frames = [];
@@ -57,6 +65,9 @@ export class MainMenu {
     this.cursor = 0;
     this.choice = null; // set to an option id once the player confirms
 
+    this.exiting = false; // true while the buttons are sliding off for PLAY
+    this.exitTime = 0;
+
     this.bgFrames = [];
     this.bgTime = 0;
     loadMenuBgFrames().then((frames) => { this.bgFrames = frames; });
@@ -71,18 +82,44 @@ export class MainMenu {
   update(dt) {
     this.bgTime += dt;
 
+    if (this.exiting) {
+      this.exitTime += dt;
+      const n = this.buttons.length;
+      // Bottom-to-top: the last button (highest index) starts first.
+      const allDone = this.buttons.every((b, i) => {
+        const start = (n - 1 - i) * EXIT_STAGGER;
+        return this.exitTime - start >= EXIT_SLIDE_DURATION;
+      });
+      if (allDone) this.choice = 'play';
+      return;
+    }
+
     const kb = this.keyboard;
     const n = this.buttons.length;
     if (kb.wasPressed('KeyW') || kb.wasPressed('ArrowUp'))   this.cursor = (this.cursor + n - 1) % n;
     if (kb.wasPressed('KeyS') || kb.wasPressed('ArrowDown')) this.cursor = (this.cursor + 1) % n;
     if (kb.wasPressed('ShiftLeft') || kb.wasPressed('ShiftRight')) {
-      this.choice = this.buttons[this.cursor].id;
+      if (this.buttons[this.cursor].id === 'play') {
+        this.exiting = true;
+        this.exitTime = 0;
+      } else {
+        this.choice = this.buttons[this.cursor].id;
+      }
     }
 
     this.buttons.forEach((b, i) => {
       const dir = i === this.cursor ? 1 : -1;
       b.hoverT = Math.min(HOVER_FRAMES, Math.max(0, b.hoverT + dir * HOVER_RATE * dt));
     });
+  }
+
+  // How far off-screen (to the left) button i currently is, 0..BTN_X+BTN_W.
+  exitOffset(i) {
+    if (!this.exiting) return 0;
+    const n = this.buttons.length;
+    const start = (n - 1 - i) * EXIT_STAGGER;
+    const t = Math.min(1, Math.max(0, (this.exitTime - start) / EXIT_SLIDE_DURATION));
+    return t * (BTN_X + BTN_W);
   }
 
   // Current MenuBG frame image, or null until the frames have loaded.
@@ -115,20 +152,23 @@ export class MainMenu {
     const opacity = Math.min(1, Math.max(0, (this.bgTime - fadeStart) / FADE_DURATION));
     if (opacity <= 0) return;
 
+    const x = BTN_X - this.exitOffset(i);
+    if (x <= -BTN_W) return; // fully off-screen
+
     const frame = b.frames[Math.round(b.hoverT)] ?? b.frames[0];
 
     ctx.save();
     ctx.globalAlpha = opacity;
     if (frame) {
-      ctx.drawImage(frame, BTN_X, y);
+      ctx.drawImage(frame, x, y);
     } else {
       // Placeholder until art loads: plain box + label
       ctx.fillStyle = i === this.cursor ? 'rgba(255,210,62,0.12)' : 'rgba(255,255,255,0.07)';
-      ctx.fillRect(BTN_X, y, 391, 100);
+      ctx.fillRect(x, y, BTN_W, 100);
       ctx.textAlign = 'center';
       ctx.fillStyle = '#fff';
       ctx.font = `bold 24px ${FONT}`;
-      ctx.fillText(b.id.toUpperCase(), BTN_X + 195, y + 56);
+      ctx.fillText(b.id.toUpperCase(), x + BTN_W / 2, y + 56);
     }
     ctx.restore();
   }
